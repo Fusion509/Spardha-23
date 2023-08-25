@@ -14,6 +14,10 @@ import django_heroku
 import pyAesCrypt
 from pathlib import Path
 from decouple import config
+import logging
+import requests
+import json
+import traceback
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -193,3 +197,60 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 # Activate Django-Heroku.
 django_heroku.settings(locals())
+
+DISCORD_URL = config("DISCORD_URL")
+DISCORD_WEBHOOK_ID =config("DISCORD_WEBHOOK_ID")
+DISCORD_WEBHOOK_TOKEN =config("DISCORD_WEBHOOK_TOKEN")
+DISCORD_SHOULD_WAIT_FOR_RESPONSE = config("DISCORD_SHOULD_WAIT_FOR_RESPONSE")
+
+class DiscordWebhookHandler(logging.Handler):
+    def __init__(self, webhook_url):
+        super().__init__()
+        self.webhook_url = webhook_url
+
+
+    def emit(self, record):
+        log_entry = self.format(record)
+        data = {'content': log_entry}
+        headers = {'Content-Type': 'application/json'}
+        response = requests.post(self.webhook_url, data=json.dumps(data), headers=headers)
+        if response.status_code != 204:
+            print("Failed to send log to Discord webhook.")
+
+discord_webhook_url = DISCORD_URL + DISCORD_WEBHOOK_ID + "/" + DISCORD_WEBHOOK_TOKEN + "?wait=" + DISCORD_SHOULD_WAIT_FOR_RESPONSE
+logger = logging.getLogger('django')
+
+logger.setLevel(logging.ERROR) 
+
+discord_handler = DiscordWebhookHandler(webhook_url=discord_webhook_url)
+logger.addHandler(discord_handler)
+
+try:
+    from django.core.management import execute_from_command_line
+    execute_from_command_line(['manage.py', 'runserver']) 
+except Exception as e:
+    error_message = f"An error occurred: {str(e)}\n\n{traceback.format_exc()}"
+    try:
+        logger.error(error_message)
+        discord_handler.emit(logging.makeLogRecord({'msg': error_message}))  # Manually emit the error message to Discord
+    except Exception as send_error:
+        logger.error("Error in sending errors to Discord: " + str(send_error))
+
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'handlers': {
+        'discord_webhook': {
+            'level': 'ERROR', 
+            'class': 'your_module_name.DiscordWebhookHandler', 
+            'webhook_url': discord_webhook_url,
+ },
+    },
+    'loggers': {
+        'django': {
+            'handlers': ['discord_webhook'], 
+            'level': 'ERROR',
+            'propagate': False,
+        },
+    },
+}
